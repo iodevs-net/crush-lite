@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/charmbracelet/crush/internal/lite"
 	"github.com/spf13/cobra"
 )
+
 
 var (
 	// Flags for lite command
@@ -92,6 +96,15 @@ crush lite --continue "continue from where we left off"
 # Verbose mode for debugging
 crush lite --verbose "run the build"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Check if server is running, if not, start it
+		serverStarted, err := ensureServerRunning()
+		if err != nil {
+			return fmt.Errorf("failed to start server: %w", err)
+		}
+		if serverStarted {
+			fmt.Fprintln(os.Stderr, "[crush] servidor iniciado")
+		}
+
 		// Get flags
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		verbose, _ := cmd.Flags().GetBool("verbose")
@@ -152,4 +165,53 @@ crush lite --verbose "run the build"`,
 		// No completion for prompts
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	},
+}
+
+
+// ensureServerRunning checks if a Crush server is running, and starts one if not.
+// Returns (true, nil) if we started a new server, (false, nil) if one was already running.
+func ensureServerRunning() (bool, error) {
+	socketPath := fmt.Sprintf("/tmp/crush-%d.sock", os.Getuid())
+
+	// Check if socket exists and is accessible
+	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
+		return startServer()
+	}
+
+	// Socket exists - try to start server anyway
+	// If one is already running, it will fail gracefully
+	return startServer()
+}
+
+// startServer starts a new Crush server in the background.
+func startServer() (bool, error) {
+	execPath, err := os.Executable()
+	if err != nil {
+		return false, fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Start server in background
+	cmd := exec.Command(execPath, "server")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("failed to start server: %w", err)
+	}
+
+	// Wait for server to be ready (max 10 seconds)
+	socketPath := fmt.Sprintf("/tmp/crush-%d.sock", os.Getuid())
+	for i := 0; i < 20; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if _, err := os.Stat(socketPath); err == nil {
+			return true, nil
+		}
+	}
+
+	// Server didn't start in time
+	cmd.Process.Kill()
+	return false, fmt.Errorf("server failed to start within 10 seconds")
 }
