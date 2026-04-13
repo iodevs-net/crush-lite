@@ -122,18 +122,31 @@ func (r *Renderer) FormatToolCall(tc proto.ToolCall) string {
 func (r *Renderer) FormatToolResult(tr proto.ToolResult) string {
 	if tr.IsError {
 		content := tr.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
+		// Only truncate very long errors (> 5000 chars)
+		if len(content) > 5000 {
+			lines := strings.Split(content, "\n")
+			if len(lines) > 50 {
+				content = strings.Join(lines[:50], "\n") + "\n... [truncated " + fmt.Sprintf("%d lines]", len(lines)-50)
+			} else {
+				content = content[:5000] + "..."
+			}
 		}
 		return fmt.Sprintf("%s %s\n", PrefixError, content)
 	}
 
 	content := tr.Content
-	if len(content) > 500 {
-		content = content[:500] + "..."
+	// Only truncate very long content (> 5000 chars)
+	if len(content) > 5000 {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 50 {
+			content = strings.Join(lines[:50], "\n") + "\n... [truncated " + fmt.Sprintf("%d lines]", len(lines)-50)
+		} else {
+			content = content[:5000] + "..."
+		}
 	}
-	// Make it a single line for clarity
-	content = strings.ReplaceAll(content, "\n", "\\n")
+
+	// Make multiline content readable (escape newlines)
+	content = strings.ReplaceAll(content, "\n", "\n   ")
 	return fmt.Sprintf("%s %s\n", PrefixOK, content)
 }
 
