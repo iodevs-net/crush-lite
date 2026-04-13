@@ -626,6 +626,7 @@ func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map
 		// NOTE: Prevent the SDK from picking up the API key from env.
 		os.Setenv("ANTHROPIC_API_KEY", "")
 		headers["Authorization"] = "Bearer " + apiKey
+		headers["anthropic-version"] = "2023-06-01"
 	case apiKey != "":
 		// X-Api-Key header
 		opts = append(opts, anthropic.WithAPIKey(apiKey))
