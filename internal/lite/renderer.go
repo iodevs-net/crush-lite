@@ -1,3 +1,5 @@
+// Package lite provides a lightweight CLI interface for Crush, designed for
+// both human users and external AI agents.
 package lite
 
 import (
@@ -5,25 +7,11 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/proto"
-	"github.com/mattn/go-runewidth"
-)
-
-// Styles for human-readable output.
-var (
-	// Colors for terminal output.
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	toolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	resultStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
-	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-	permStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
-	helpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	thinkStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
 )
 
 // Renderer handles formatting of events for display.
+// Output is plain text with clear prefixes for universal CLI readability.
 type Renderer struct {
 	mode OutputMode
 }
@@ -33,207 +21,168 @@ func NewRenderer(mode OutputMode) *Renderer {
 	return &Renderer{mode: mode}
 }
 
-// FormatThinking formats reasoning/thinking content.
-func (r *Renderer) FormatThinking(content string) string {
-	if r.mode == ModePlain {
-		return formatBox("THINKING", content, "...")
-	}
+// Prefix styles for different event types
+const (
+	PrefixUser     = "[USER]"
+	PrefixAssistant = "[CLAUDE]"
+	PrefixThinking  = "[THINKING]"
+	PrefixTool      = "[TOOL]"
+	PrefixWrite     = "[WRITE]"
+	PrefixRead      = "[READ]"
+	PrefixEdit      = "[EDIT]"
+	PrefixAsk       = "[ASK]"
+	PrefixPerm      = "[PERM]"
+	PrefixError     = "[ERROR]"
+	PrefixOK        = "[OK]"
+	PrefixMCP       = "[MCP]"
+)
 
-	lines := strings.Split(content, "\n")
-	if len(lines) > 3 {
-		content = strings.Join(lines[:3], "\n") + "\n  ..."
-	}
-	return fmt.Sprintf("%s\n%s\n\n", thinkStyle.Render("💭 Thinking..."), indent(content, 2))
+// FormatUser formats a user message.
+func (r *Renderer) FormatUser(content string) string {
+	return fmt.Sprintf("%s %s\n", PrefixUser, content)
 }
 
-// FormatToolCall formats a tool call for display.
+// FormatAssistant formats an assistant response.
+func (r *Renderer) FormatAssistant(content string) string {
+	// Remove thinking markers if present
+	content = strings.ReplaceAll(content, "<reasoning>", "")
+	content = strings.ReplaceAll(content, "</reasoning>", "")
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s %s\n", PrefixAssistant, content)
+}
+
+// FormatThinking formats thinking/reasoning content.
+func (r *Renderer) FormatThinking(content string) string {
+	if content == "" {
+		return ""
+	}
+	// Clean up thinking content
+	content = strings.ReplaceAll(content, "<reasoning>", "")
+	content = strings.ReplaceAll(content, "</reasoning>", "")
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	// Truncate long thoughts
+	if len(content) > 200 {
+		content = content[:200] + "..."
+	}
+	return fmt.Sprintf("%s %s\n", PrefixThinking, content)
+}
+
+// FormatToolCall formats a tool call.
 func (r *Renderer) FormatToolCall(tc proto.ToolCall) string {
 	toolName := tc.Name
 	if toolName == "" {
-		toolName = "Unknown"
+		toolName = "unknown"
 	}
 
-	var details strings.Builder
-	details.WriteString(toolStyle.Render("[" + toolName + "]"))
-
-	// Parse input for relevant details
+	var details string
 	var input map[string]any
 	if err := json.Unmarshal([]byte(tc.Input), &input); err == nil {
 		switch toolName {
 		case "Bash", "bash":
 			if cmd, ok := input["command"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(truncate(cmd, 100)))
+				details = cmd
 			}
 		case "View", "view", "ReadFile", "read_file":
 			if path, ok := input["path"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(path))
+				details = path
+				return fmt.Sprintf("%s %s %s\n", PrefixRead, toolName, details)
 			}
 		case "Write", "write", "WriteFile", "write_file":
 			if path, ok := input["path"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(path))
+				details = path
+				return fmt.Sprintf("%s %s %s\n", PrefixWrite, toolName, details)
 			}
 		case "Edit", "edit":
 			if path, ok := input["path"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(path))
+				details = path
+				return fmt.Sprintf("%s %s %s\n", PrefixEdit, toolName, details)
 			}
-		case "Grep", "grep", "Search", "search":
+		case "Glob", "glob", "Grep", "grep", "Search", "search":
 			if pattern, ok := input["pattern"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render("\"" + pattern + "\""))
-			}
-		case "Glob", "glob":
-			if pattern, ok := input["pattern"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(pattern))
+				details = pattern
 			}
 		case "WebFetch", "web_fetch", "Fetch", "fetch":
 			if url, ok := input["url"].(string); ok {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(truncate(url, 60)))
+				details = url
 			}
 		default:
-			// Generic format for unknown tools
-			if len(input) > 0 {
-				details.WriteString(" ")
-				details.WriteString(dimStyle.Render(fmt.Sprintf("%v", input)))
-			}
+			details = toolName
 		}
 	}
 
-	return details.String() + "\n"
+	if details != "" {
+		return fmt.Sprintf("%s %s %s\n", PrefixTool, toolName, details)
+	}
+	return fmt.Sprintf("%s %s\n", PrefixTool, toolName)
 }
 
-// FormatToolResult formats a tool result for display.
+// FormatToolResult formats a tool result.
 func (r *Renderer) FormatToolResult(tr proto.ToolResult) string {
 	if tr.IsError {
-		return fmt.Sprintf("%s %s\n\n", errorStyle.Render("✗"), truncate(tr.Content, 200))
+		content := tr.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		return fmt.Sprintf("%s %s\n", PrefixError, content)
 	}
 
-	// Truncate long results
 	content := tr.Content
 	if len(content) > 500 {
-		content = content[:500] + "\n  ..."
+		content = content[:500] + "..."
 	}
-
-	return fmt.Sprintf("%s %s\n\n", resultStyle.Render("✓"), indent(content, 2))
+	// Make it a single line for clarity
+	content = strings.ReplaceAll(content, "\n", "\\n")
+	return fmt.Sprintf("%s %s\n", PrefixOK, content)
 }
 
-// FormatUserMessage formats a user message for display.
-func (r *Renderer) FormatUserMessage(content string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) > 3 {
-		content = strings.Join(lines[:3], "\n") + "\n  ..."
-	}
-	return fmt.Sprintf("%s %s\n\n", toolStyle.Render(">"), content)
-}
-
-// FormatPermissionRequestHuman formats a permission request for human interaction.
-func (r *Renderer) FormatPermissionRequestHuman(req proto.PermissionRequest) string {
+// FormatPermission formats a permission request.
+func (r *Renderer) FormatPermission(req proto.PermissionRequest) string {
 	var lines []string
+	lines = append(lines, fmt.Sprintf("%s %s", PrefixPerm, req.ToolName))
 
-	lines = append(lines, "")
-	lines = append(lines, permStyle.Render("┌─────────────────────────────────────────────────────────────┐"))
-	lines = append(lines, permStyle.Render("│ PERMISO REQUERIDO                                              │"))
-	lines = append(lines, permStyle.Render("└─────────────────────────────────────────────────────────────┘"))
-	lines = append(lines, "")
-
-	// Tool info
-	lines = append(lines, fmt.Sprintf("  Herramienta: %s", toolStyle.Render(req.ToolName)))
-
-	// Action/description
 	if req.Description != "" {
-		lines = append(lines, fmt.Sprintf("  Acción: %s", req.Description))
+		lines = append(lines, fmt.Sprintf("   %s", req.Description))
 	}
-
-	// Path if relevant
 	if req.Path != "" {
-		lines = append(lines, fmt.Sprintf("  Ruta: %s", dimStyle.Render(req.Path)))
+		lines = append(lines, fmt.Sprintf("   %s", req.Path))
 	}
 
-	// Params
+	// Add params if relevant
 	if req.Params != nil {
 		if params, ok := req.Params.(map[string]any); ok {
-			var paramLines []string
 			for k, v := range params {
-				if s, ok := v.(string); ok && len(s) > 100 {
-					v = s[:100] + "..."
+				if s, ok := v.(string); ok && len(s) > 80 {
+					v = s[:80] + "..."
 				}
-				paramLines = append(paramLines, fmt.Sprintf("    %s: %v", k, v))
-			}
-			if len(paramLines) > 0 {
-				lines = append(lines, "  Parámetros:")
-				lines = append(lines, paramLines...)
+				lines = append(lines, fmt.Sprintf("   %s=%v", k, v))
 			}
 		}
 	}
 
-	lines = append(lines, "")
-	lines = append(lines, warnStyle.Render("  ¿Permitir? [y]es / [n]o / [a]llow always: "))
-
-	return strings.Join(lines, "\n")
+	lines = append(lines, fmt.Sprintf("   [y]es / [n]o / [a]lways"))
+	return strings.Join(lines, "\n") + "\n"
 }
 
-// FormatPermissionRequestJSON formats a permission request as JSON for agent mode.
-func (r *Renderer) FormatPermissionRequestJSON(req proto.PermissionRequest) string {
-	data := map[string]any{
-		"id":          req.ID,
-		"tool_name":   req.ToolName,
-		"description": req.Description,
-		"action":      req.Action,
-		"path":        req.Path,
-		"params":      req.Params,
+// FormatError formats an error message.
+func (r *Renderer) FormatError(err string) string {
+	return fmt.Sprintf("%s %s\n", PrefixError, err)
+}
+
+// FormatAsk formats a question to the user.
+func (r *Renderer) FormatAsk(question string) string {
+	return fmt.Sprintf("%s %s [y/n]: ", PrefixAsk, question)
+}
+
+// FormatMCP formats an MCP server event.
+func (r *Renderer) FormatMCP(server, action, details string) string {
+	if details != "" {
+		return fmt.Sprintf("%s %s: %s - %s\n", PrefixMCP, server, action, details)
 	}
-	jsonData, _ := json.Marshal(data)
-	return string(jsonData)
-}
-
-// FormatPermissionDenied formats a permission denied notification.
-func (r *Renderer) FormatPermissionDenied() string {
-	return fmt.Sprintf("%s Permiso denegado\n\n", errorStyle.Render("✗"))
-}
-
-// FormatHelp formats the help text.
-func (r *Renderer) FormatHelp() string {
-	return `
-Comandos disponibles:
-  help, ?     - Mostrar esta ayuda
-  quit, exit, q - Salir
-
-  En modo interactivo, puedes escribir cualquier prompt.
-`
-}
-
-// formatBox creates a formatted box with title and content.
-func formatBox(title, content, prefix string) string {
-	width := 60
-	lines := []string{
-		fmt.Sprintf("┌─ %s %s", title, strings.Repeat("─", width-len(title)-len(prefix)-4)) + "┐",
-	}
-	for _, line := range strings.Split(content, "\n") {
-		padding := width - runewidth.StringWidth(line) - 2
-		if padding < 0 {
-			padding = 0
-		}
-		lines = append(lines, fmt.Sprintf("│ %s%s │", line, strings.Repeat(" ", padding)))
-	}
-	lines = append(lines, fmt.Sprintf("└%s┘", strings.Repeat("─", width-1)))
-	return strings.Join(lines, "\n")
-}
-
-// indent indents text by the specified number of spaces.
-func indent(text string, spaces int) string {
-	prefix := strings.Repeat(" ", spaces)
-	return prefix + strings.ReplaceAll(text, "\n", "\n"+prefix)
-}
-
-// truncate truncates a string to the specified length.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return fmt.Sprintf("%s %s: %s\n", PrefixMCP, server, action)
 }
