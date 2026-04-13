@@ -80,6 +80,10 @@ type Runner struct {
 	// Track what we've already output to avoid duplicates
 	outputCache map[string]string
 
+	// Agent finished flag
+	agentFinished     bool
+	agentFinishedMux sync.Mutex
+
 	// Workspace path for local operations
 	wsPath string
 }
@@ -278,6 +282,13 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 		go r.handleInput(ctx)
 	}
 
+	// Timer for graceful shutdown after agent finishes
+	finishTimer := time.NewTimer(0)
+	if !finishTimer.Stop() {
+		<-finishTimer.C
+	}
+	waitForFinish := false
+
 	// Main event loop
 	for {
 		select {
@@ -288,6 +299,13 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 				}
 				return nil
 			}
+
+			// Check if agent finished
+			if r.agentFinished && !waitForFinish {
+				waitForFinish = true
+			finishTimer.Reset(30 * time.Second)
+			}
+
 			if err := r.handleEvent(ev); err != nil {
 				if inputCancel != nil {
 					inputCancel()
@@ -299,6 +317,13 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 			if err := r.handlePermissionResponse(ctx, resp); err != nil {
 				slog.Error("Failed to handle permission response", "error", err)
 			}
+
+		case <-finishTimer.C:
+			// Agent finished and we've waited, safe to exit
+			if inputCancel != nil {
+				inputCancel()
+			}
+			return nil
 
 		case <-ctx.Done():
 			if inputCancel != nil {
@@ -424,6 +449,13 @@ func (r *Runner) handleAgentEvent(ev proto.AgentEvent) error {
 	if ev.Error != nil {
 		return fmt.Errorf("agent error: %v", ev.Error)
 	}
+
+	if ev.Type == "agent_finished" {
+		r.agentFinishedMux.Lock()
+		r.agentFinished = true
+		r.agentFinishedMux.Unlock()
+	}
+
 	if r.verbose {
 		slog.Info("Agent event", "type", ev.Type)
 	}
