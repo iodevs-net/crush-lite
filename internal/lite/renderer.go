@@ -24,7 +24,7 @@ func NewRenderer(mode OutputMode) *Renderer {
 // Prefix styles for different event types
 const (
 	PrefixUser     = "[USER]"
-	PrefixAssistant = "[CLAUDE]"
+	PrefixAssistant = "[CRUSH]"
 	PrefixThinking  = "[THINKING]"
 	PrefixTool      = "[TOOL]"
 	PrefixWrite     = "[WRITE]"
@@ -65,10 +65,6 @@ func (r *Renderer) FormatThinking(content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
-	}
-	// Truncate long thoughts
-	if len(content) > 200 {
-		content = content[:200] + "..."
 	}
 	return fmt.Sprintf("%s %s\n", PrefixThinking, content)
 }
