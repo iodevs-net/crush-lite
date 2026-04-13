@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -174,13 +175,36 @@ func ensureServerRunning() (bool, error) {
 	socketPath := fmt.Sprintf("/tmp/crush-%d.sock", os.Getuid())
 
 	// Check if socket exists and is accessible
-	if _, err := os.Stat(socketPath); os.IsNotExist(err) {
-		return startServer()
+	if _, err := os.Stat(socketPath); err == nil {
+		// Socket exists, try to connect and verify server is running
+		if isServerRunning(socketPath) {
+			return false, nil
+		}
+		// Socket exists but server is not responding, try to start fresh
 	}
 
-	// Socket exists - try to start server anyway
-	// If one is already running, it will fail gracefully
+	// Server not running, start it
 	return startServer()
+}
+
+// isServerRunning checks if a Crush server is responding on the given socket path.
+func isServerRunning(socketPath string) bool {
+	// Try to make an HTTP request to the server via the unix socket
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	// Send a simple HTTP request to check if server is alive
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	// Read any pending data (server might send welcome message)
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	buf := make([]byte, 1024)
+	conn.Read(buf)
+
+	return true
 }
 
 // startServer starts a new Crush server in the background.

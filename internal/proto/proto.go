@@ -43,9 +43,10 @@ func (a AgentInfo) IsZero() bool {
 
 // AgentMessage represents a message sent to the agent.
 type AgentMessage struct {
-	SessionID   string       `json:"session_id"`
-	Prompt      string       `json:"prompt"`
-	Attachments []Attachment `json:"attachments,omitempty"`
+	SessionID       string       `json:"session_id"`
+	Prompt          string       `json:"prompt"`
+	Attachments      []Attachment `json:"attachments,omitempty"`
+	NonInteractive   bool         `json:"non_interactive"`
 }
 
 // AgentSession represents a session with its busy status.

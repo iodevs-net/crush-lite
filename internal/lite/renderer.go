@@ -54,6 +54,16 @@ func (r *Renderer) FormatAssistant(content string) string {
 	return fmt.Sprintf("%s %s\n", PrefixAssistant, content)
 }
 
+// FormatAssistantRaw formats assistant response content without prefix.
+// Used for streaming deltas.
+func (r *Renderer) FormatAssistantRaw(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	return content
+}
+
 // FormatThinking formats thinking/reasoning content.
 func (r *Renderer) FormatThinking(content string) string {
 	if content == "" {

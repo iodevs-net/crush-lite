@@ -288,22 +288,17 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 		<-finishTimer.C
 	}
 	waitForFinish := false
+	eventsClosed := false
 
 	// Main event loop
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				if inputCancel != nil {
-					inputCancel()
-				}
-				return nil
-			}
-
-			// Check if agent finished
-			if r.agentFinished && !waitForFinish {
-				waitForFinish = true
-			finishTimer.Reset(30 * time.Second)
+				// Events channel closed - mark it but don't exit yet
+				// We need to wait for the timer if agent finished
+				eventsClosed = true
+				break
 			}
 
 			if err := r.handleEvent(ev); err != nil {
@@ -313,13 +308,20 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 				return err
 			}
 
+			// Check if agent finished AFTER processing event
+			// (agentFinished is set inside handleEvent when agent_finished event is received)
+			if r.agentFinished && !waitForFinish {
+				waitForFinish = true
+				finishTimer.Reset(30 * time.Second)
+			}
+
 		case resp := <-r.permResponses:
 			if err := r.handlePermissionResponse(ctx, resp); err != nil {
 				slog.Error("Failed to handle permission response", "error", err)
 			}
 
 		case <-finishTimer.C:
-			// Agent finished and we've waited, safe to exit
+			// Agent finished and we've waited 30 seconds, safe to exit
 			if inputCancel != nil {
 				inputCancel()
 			}
@@ -330,6 +332,22 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 				inputCancel()
 			}
 			return ctx.Err()
+		}
+
+		// If events channel closed, we need to wait for the timer
+		if eventsClosed {
+			// Try to receive from timer channel without blocking
+			select {
+			case <-finishTimer.C:
+				// Timer fired, we're done
+				if inputCancel != nil {
+					inputCancel()
+				}
+				return nil
+			default:
+				// Timer hasn't fired yet, continue to next iteration
+				// but we'll block on select waiting for timer or context
+			}
 		}
 	}
 }
@@ -391,11 +409,12 @@ func (r *Runner) handleAssistantMessage(msg proto.Message) error {
 	if len(content) > prevBytes {
 		delta := content[prevBytes:]
 		if strings.TrimSpace(delta) != "" {
-			// Cache the full content to avoid duplicates
-			cacheKey := msg.ID + "_text"
-			if _, seen := r.outputCache[cacheKey]; !seen {
-				r.outputCache[cacheKey] = content
-				r.output("text", r.renderer.FormatAssistant(content))
+			// First time showing this message - use full format with prefix
+			if prevBytes == 0 {
+				r.output("text", r.renderer.FormatAssistant(delta))
+			} else {
+				// Streaming update - show delta without prefix
+				r.output("text", r.renderer.FormatAssistantRaw(delta))
 			}
 		}
 		r.messageStates[msg.ID] = len(content)
