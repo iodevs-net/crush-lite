@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/charmbracelet/crush/internal/lite"
 	"github.com/spf13/cobra"
 )
@@ -126,11 +128,19 @@ crush lite --verbose "run the build"`,
 
 		// Build prompt from args or stdin
 		prompt := strings.Join(args, " ")
+		interactive := false
+
 		if prompt == "" {
 			// Try to read from stdin if pipe
 			prompt = os.Getenv("CRUSH_PROMPT")
 			if prompt == "" {
-				return fmt.Errorf("no prompt provided: pass as argument or set CRUSH_PROMPT env var")
+				// No prompt provided - check if we're in a terminal (interactive mode)
+				// Check stdin for interactive input
+				if term.IsTerminal(int(os.Stdin.Fd())) {
+					interactive = true
+				} else {
+					return fmt.Errorf("no prompt provided: pass as argument, set CRUSH_PROMPT env var, or run interactively in a terminal")
+				}
 			}
 		}
 
@@ -160,7 +170,7 @@ crush lite --verbose "run the build"`,
 			// We'll resolve the last session in the runner
 		}
 
-		return runner.Run(ctx, cwd, prompt, "", "", continueSessionID)
+		return runner.Run(ctx, cwd, prompt, "", "", continueSessionID, interactive)
 	},
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		// No completion for prompts

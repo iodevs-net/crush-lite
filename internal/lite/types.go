@@ -112,7 +112,7 @@ func NewRunner(mode OutputMode, quiet, verbose, skipPerms, yolo bool) *Runner {
 }
 
 // Run executes a prompt in lite mode.
-func (r *Runner) Run(ctx context.Context, cwd string, prompt string, largeModel, smallModel string, continueSessionID string) error {
+func (r *Runner) Run(ctx context.Context, cwd string, prompt string, largeModel, smallModel string, continueSessionID string, interactive bool) error {
 	event.SetNonInteractive(r.mode != ModeHuman)
 	event.AppInitialized()
 
@@ -126,20 +126,20 @@ func (r *Runner) Run(ctx context.Context, cwd string, prompt string, largeModel,
 	r.wsPath = cwd
 
 	// Use client/server mode
-	return r.runWithServer(ctx, cwd, prompt, largeModel, smallModel, continueSessionID)
+	return r.runWithServer(ctx, cwd, prompt, largeModel, smallModel, continueSessionID, interactive)
 }
 
 // runWithServer connects to an existing Crush server or starts one locally.
-func (r *Runner) runWithServer(ctx context.Context, cwd, prompt, largeModel, smallModel, continueSessionID string) error {
+func (r *Runner) runWithServer(ctx context.Context, cwd, prompt, largeModel, smallModel, continueSessionID string, interactive bool) error {
 	// Check if we should use an existing server or start local mode
 	if useClientServer() {
-		return r.runWithExistingServer(ctx, cwd, prompt, largeModel, smallModel, continueSessionID)
+		return r.runWithExistingServer(ctx, cwd, prompt, largeModel, smallModel, continueSessionID, interactive)
 	}
 	return r.runLocal(ctx, cwd, prompt, largeModel, smallModel, continueSessionID)
 }
 
 // runWithExistingServer connects to a running Crush server.
-func (r *Runner) runWithExistingServer(ctx context.Context, cwd, prompt, largeModel, smallModel, continueSessionID string) error {
+func (r *Runner) runWithExistingServer(ctx context.Context, cwd, prompt, largeModel, smallModel, continueSessionID string, interactive bool) error {
 	// Try to connect to existing server
 	c, err := client.DefaultClient(cwd)
 	if err != nil {
@@ -181,7 +181,7 @@ func (r *Runner) runWithExistingServer(ctx context.Context, cwd, prompt, largeMo
 		return err
 	}
 
-	return r.runLoop(ctx, prompt)
+	return r.runLoop(ctx, prompt, interactive)
 }
 
 // runLocal starts a local Crush instance.
@@ -257,7 +257,7 @@ func (r *Runner) overrideModels(ctx context.Context, largeModel, smallModel stri
 }
 
 // runLoop handles the main event loop with SSE and interactive input.
-func (r *Runner) runLoop(ctx context.Context, prompt string) error {
+func (r *Runner) runLoop(ctx context.Context, prompt string, interactive bool) error {
 	if r.workspace == nil {
 		return fmt.Errorf("workspace not initialized")
 	}
@@ -270,9 +270,11 @@ func (r *Runner) runLoop(ctx context.Context, prompt string) error {
 		return fmt.Errorf("failed to subscribe to events: %w", err)
 	}
 
-	// Send initial prompt
-	if err := r.client.SendMessage(ctx, wsID, r.sessionID, prompt); err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
+	// Send initial prompt (skip if interactive mode with no initial prompt)
+	if prompt != "" {
+		if err := r.client.SendMessage(ctx, wsID, r.sessionID, prompt); err != nil {
+			return fmt.Errorf("failed to send message: %w", err)
+		}
 	}
 
 	// Start input handler goroutine for interactive mode
