@@ -24,9 +24,9 @@ import (
 type OutputMode int
 
 const (
-	// ModeHuman is the default mode with colored, human-readable output.
+	// ModeHuman is the default mode with clear, plain text output.
 	ModeHuman OutputMode = iota
-	// ModePlain is plain text output without colors or formatting.
+	// ModePlain is plain text output without any formatting.
 	ModePlain
 	// ModeAgent is JSON-structured output for external AI agents.
 	ModeAgent
@@ -77,6 +77,8 @@ type Runner struct {
 
 	// Track message streaming for incremental output
 	messageStates map[string]int // messageID -> bytesRead
+	// Track what we've already output to avoid duplicates
+	outputCache map[string]string
 
 	// Workspace path for local operations
 	wsPath string
@@ -100,6 +102,7 @@ func NewRunner(mode OutputMode, quiet, verbose, skipPerms, yolo bool) *Runner {
 		inputReader:   NewInputReader(),
 		permResponses: make(chan PermissionResponse, 10),
 		messageStates: make(map[string]int),
+		outputCache:   make(map[string]string),
 	}
 	return r
 }
@@ -348,9 +351,13 @@ func (r *Runner) handleAssistantMessage(msg proto.Message) error {
 		return nil
 	}
 
-	// Handle reasoning if present
+	// Handle reasoning if present (only show once per message)
 	if reasoning := msg.ReasoningContent(); reasoning.Thinking != "" {
-		r.output("thinking", r.renderer.FormatThinking(reasoning.Thinking))
+		cacheKey := msg.ID + "_thinking"
+		if _, seen := r.outputCache[cacheKey]; !seen {
+			r.outputCache[cacheKey] = reasoning.Thinking
+			r.output("thinking", r.renderer.FormatThinking(reasoning.Thinking))
+		}
 	}
 
 	// Handle text content with streaming support
@@ -359,14 +366,23 @@ func (r *Runner) handleAssistantMessage(msg proto.Message) error {
 	if len(content) > prevBytes {
 		delta := content[prevBytes:]
 		if strings.TrimSpace(delta) != "" {
-			r.output("text", delta)
+			// Cache the full content to avoid duplicates
+			cacheKey := msg.ID + "_text"
+			if _, seen := r.outputCache[cacheKey]; !seen {
+				r.outputCache[cacheKey] = content
+				r.output("text", r.renderer.FormatAssistant(content))
+			}
 		}
 		r.messageStates[msg.ID] = len(content)
 	}
 
-	// Handle tool calls
+	// Handle tool calls (only show each tool once)
 	for _, tc := range msg.ToolCalls() {
-		r.output("tool_call", r.renderer.FormatToolCall(tc))
+		cacheKey := msg.ID + "_tool_" + tc.Name
+		if _, seen := r.outputCache[cacheKey]; !seen {
+			r.outputCache[cacheKey] = tc.Input
+			r.output("tool_call", r.renderer.FormatToolCall(tc))
+		}
 	}
 
 	// Handle tool results
@@ -383,6 +399,7 @@ func (r *Runner) handleAssistantMessage(msg proto.Message) error {
 		}
 		// Clean up state for this message
 		delete(r.messageStates, msg.ID)
+		// Keep cache for deduplication across messages
 	}
 
 	return nil
@@ -391,7 +408,7 @@ func (r *Runner) handleAssistantMessage(msg proto.Message) error {
 // handleUserMessage renders user input echo.
 func (r *Runner) handleUserMessage(msg proto.Message) {
 	if content := msg.Content().String(); content != "" {
-		r.output("user", r.renderer.FormatUserMessage(content))
+		r.output("user", r.renderer.FormatUser(content))
 	}
 }
 
@@ -429,7 +446,7 @@ func (r *Runner) handlePermissionRequest(req proto.PermissionRequest) error {
 
 	// In agent mode, output JSON and wait for response
 	if r.mode == ModeAgent {
-		r.output("permission_request", r.renderer.FormatPermissionRequestJSON(req))
+		r.output("permission_request", r.renderer.FormatPermission(req))
 		// Wait for response via input channel
 		resp := <-r.permResponses
 		if resp.ID != req.ID {
@@ -441,7 +458,7 @@ func (r *Runner) handlePermissionRequest(req proto.PermissionRequest) error {
 	}
 
 	// In human mode, prompt for input
-	r.output("permission_request", r.renderer.FormatPermissionRequestHuman(req))
+	r.output("permission_request", r.renderer.FormatPermission(req))
 
 	// Start input handler if not running
 	go func() {
@@ -471,7 +488,7 @@ func (r *Runner) handlePermissionRequest(req proto.PermissionRequest) error {
 // handlePermissionNotification acknowledges permission results.
 func (r *Runner) handlePermissionNotification(notif proto.PermissionNotification) {
 	if notif.Denied {
-		r.output("permission", r.renderer.FormatPermissionDenied())
+		r.output("permission", r.renderer.FormatError("Permission denied"))
 	}
 	// Granted notifications are silent in normal mode
 }
@@ -590,4 +607,15 @@ func (r *Runner) GrantPermission(req proto.PermissionRequest, action proto.Permi
 		return r.client.GrantPermission(context.Background(), r.workspace.ID, grant)
 	}
 	return nil
+}
+
+// FormatHelp returns the help text.
+func (r *Renderer) FormatHelp() string {
+	return `
+Commands:
+  help, ?   - Show this help
+  quit, q   - Exit
+
+In interactive mode, type any prompt to continue the conversation.
+`
 }
